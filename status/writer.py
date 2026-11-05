@@ -5,22 +5,31 @@ import time
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _STATUS_DIR = os.path.join(_PLUGIN_DIR, "status")
 
-
-def _atomic_write(path, data):
-    tmp = path + f".{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+_MAX_AGE_SEC = 24 * 3600
 
 
-def write_runtime(agent, deps_report, db_root, version="1.2.1"):
-    """两个文件：
-    - status/{agent}.json —— 按 Agent 分文件，避免多进程互相覆盖
-    - status/runtime.json —— 兼容旧 booth 读法（最后一次写者为胜）
-    """
+def _cleanup_old_files():
+    """删除超过 24 小时的进程状态文件，防止无界累积。"""
+    try:
+        now = time.time()
+        for fname in os.listdir(_STATUS_DIR):
+            if not fname.endswith(".json"):
+                continue
+            path = os.path.join(_STATUS_DIR, fname)
+            try:
+                if now - os.path.getmtime(path) > _MAX_AGE_SEC:
+                    os.remove(path)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def write_runtime(agent, deps_report, db_root, version="1.2.11", role="unknown"):
     data = {
         "pid": os.getpid(),
         "agent": agent or "unknown",
+        "role": role,
         "started_at": int(time.time()),
         "deps": deps_report,
         "db_root": db_root,
@@ -29,10 +38,14 @@ def write_runtime(agent, deps_report, db_root, version="1.2.1"):
     }
     try:
         os.makedirs(_STATUS_DIR, exist_ok=True)
-        _atomic_write(os.path.join(_STATUS_DIR, f"{agent or 'unknown'}.json"), data)
-    except Exception:
-        pass
-    try:
-        _atomic_write(os.path.join(_STATUS_DIR, "runtime.json"), data)
+        _cleanup_old_files()
+        path = os.path.join(
+            _STATUS_DIR,
+            f"{agent or 'unknown'}.{role}.{os.getpid()}.json",
+        )
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
     except Exception:
         pass

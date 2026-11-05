@@ -44,6 +44,15 @@ def init_agent(ctx):
     from config import get_config
     cfg = get_config()
 
+    # 先建表
+    if cfg.is_enabled():
+        try:
+            from storage import ensure_db
+            ensure_db(name)
+        except Exception as e:
+            log(f"预热 DB 失败: {e}", agent=name)
+
+    # 再启动 TCP
     client = None
     remote = cfg.get_remote()
     if remote.get("enabled"):
@@ -52,13 +61,6 @@ def init_agent(ctx):
             client = get_client(name, remote)
         except Exception as e:
             log(f"TCP client 初始化失败: {e}", agent=name)
-
-    if cfg.is_enabled():
-        try:
-            from storage import ensure_db
-            ensure_db(name)
-        except Exception as e:
-            log(f"预热 DB 失败: {e}", agent=name)
 
     return name, client
 

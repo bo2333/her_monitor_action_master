@@ -32,7 +32,7 @@ HOOKS = [
 ]
 
 
-def init_agent(ctx):
+def init_agent(ctx, role="unknown"):
     try:
         name = ctx.profile_name
     except Exception:
@@ -44,7 +44,6 @@ def init_agent(ctx):
     from config import get_config
     cfg = get_config()
 
-    # 先建表
     if cfg.is_enabled():
         try:
             from storage import ensure_db
@@ -52,13 +51,16 @@ def init_agent(ctx):
         except Exception as e:
             log(f"预热 DB 失败: {e}", agent=name)
 
-    # 再启动 TCP
     client = None
     remote = cfg.get_remote()
     if remote.get("enabled"):
         try:
             from sinks import get_client
-            client = get_client(name, remote)
+            # ★ 只有 gateway 做历史回放，dashboard 不发历史（避免两进程各发一份）
+            client = get_client(
+                name, remote,
+                send_history=(role != "dashboard"),
+            )
         except Exception as e:
             log(f"TCP client 初始化失败: {e}", agent=name)
 

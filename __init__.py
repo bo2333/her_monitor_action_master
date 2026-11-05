@@ -39,9 +39,6 @@ except Exception as e:
     raise
 
 
-# ============================================================
-# 进程角色识别
-# ============================================================
 def _process_role():
     """返回 'dashboard' / 'gateway' / 'cli' / 'unknown'。
 
@@ -66,9 +63,6 @@ def _process_role():
 _ROLE = _process_role()
 
 
-# ============================================================
-# TUI Gateway config.set setter
-# ============================================================
 def _handle_config_set(rid, params, key, value, session):
     from config.loader import get_config
     from config import MASTER_CONFIG
@@ -118,9 +112,6 @@ def _register_config_setter():
 _RPC_AVAILABLE = _register_config_setter()
 
 
-# ============================================================
-# 插件入口
-# ============================================================
 def register(ctx):
     print(f"[monitor] register() ENTER pid={_os.getpid()} role={_ROLE} "
           f"argv={_sys.argv[1:3]!r}",
@@ -129,20 +120,13 @@ def register(ctx):
     log("=" * 60)
     log("register(ctx) 被调用")
 
-    # dashboard 进程不跑 Agent 循环，只把 Web UI 请求转发给 gateway，
-    # 注册 hook 只会产生重复写库和重复推送
-    # if _ROLE == "dashboard":
-    #     print(f"[monitor] dashboard 进程 pid={_os.getpid()}，跳过 hook 注册",
-    #           file=_sys.stderr, flush=True)
-    #     return
-
     if getattr(ctx, "_monitor_action_registered", False):
         log("⚠ 检测到重复注册，跳过")
         return
     ctx._monitor_action_registered = True
 
     try:
-        agent_name, client = registry.init_agent(ctx)
+        agent_name, client = registry.init_agent(ctx, role=_ROLE)
         print(f"[monitor] init_agent OK role={_ROLE} agent={agent_name} "
               f"client={'有' if client else '无'}",
               file=_sys.stderr, flush=True)
@@ -160,7 +144,7 @@ def register(ctx):
         from config import get_config
         write_runtime(agent_name, _DEPS_REPORT,
                       get_config().get_db_root(),
-                      version="1.2.11",
+                      version="1.2.12",
                       role=_ROLE)
     except Exception as e:
         log(f"写出 runtime 状态失败: {e}", agent=agent_name)

@@ -13,8 +13,9 @@ _LOOP_TICK = 0.1
 
 
 class TcpClient:
-    def __init__(self, agent_name, config):
+    def __init__(self, agent_name, config, send_history=True):
         self.agent_name = agent_name or "unknown"
+        self._send_history_enabled = send_history
         self.push_queue = queue.Queue(maxsize=10000)
         self._sock = None
         self._connected = False
@@ -32,7 +33,8 @@ class TcpClient:
             return
 
         log(f"[sink] TcpClient 初始化 agent={self.agent_name} "
-            f"target={config.get('host')}:{config.get('port')}",
+            f"target={config.get('host')}:{config.get('port')} "
+            f"send_history={self._send_history_enabled}",
             agent=self.agent_name, force=True)
 
         threading.Thread(target=self._loop, daemon=True).start()
@@ -54,6 +56,8 @@ class TcpClient:
             pass
 
     def _send_history(self, sock):
+        if not self._send_history_enabled:
+            return
         try:
             db_path = os.path.join(self._get_db_root(), f"{self.agent_name}.db")
         except Exception as e:
@@ -234,9 +238,11 @@ _clients = {}
 _clients_lock = threading.Lock()
 
 
-def get_client(agent_name, config):
+def get_client(agent_name, config, send_history=True):
     agent_name = agent_name or "unknown"
     with _clients_lock:
         if agent_name not in _clients:
-            _clients[agent_name] = TcpClient(agent_name, config)
+            _clients[agent_name] = TcpClient(
+                agent_name, config, send_history=send_history,
+            )
         return _clients[agent_name]

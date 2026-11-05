@@ -1,17 +1,22 @@
 import logging
+import os
+
+_PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOG_DIR = os.path.join(_PLUGIN_DIR, "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_LOG_FILE = os.path.join(_LOG_DIR, "plugin.log")
 
 _logger = logging.getLogger("monitor_action_master")
+_logger.setLevel(logging.INFO)
+_logger.propagate = False
 
-# 若 Hermes 已配置 root logger，则沿用；否则加一个 fallback
-if not _logger.handlers and not logging.getLogger().handlers:
-    _handler = logging.StreamHandler()
+if not _logger.handlers:
+    _handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
     _handler.setFormatter(logging.Formatter(
-        "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
+        "[%(asctime)s] [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     ))
     _logger.addHandler(_handler)
-
-_logger.setLevel(logging.INFO)
 
 
 def log(msg, agent=None, level=logging.INFO):

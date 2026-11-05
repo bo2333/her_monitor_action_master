@@ -1,4 +1,3 @@
-# events/formatter.py
 import time
 
 

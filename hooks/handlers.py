@@ -52,10 +52,6 @@ def _preview(val, limit=1500):
     return s
 
 
-# ============================================================
-# 27 个 observer hook（同上一版，略）
-# ============================================================
-
 def on_pre_llm_call(**kw):
     msg = kw.get("user_message") or kw.get("prompt")
     if not msg:

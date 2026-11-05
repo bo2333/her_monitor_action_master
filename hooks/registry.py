@@ -61,8 +61,6 @@ def init_agent(ctx):
 
 
 def bind_hooks(ctx, handlers):
-    from context import set_current_agent, clear_current_agent
-
     def bind(fn):
         def wrapped(**kw):
             set_current_agent(None, None)

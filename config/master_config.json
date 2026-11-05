@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "logging": false,
   "db_root": "",
   "remote": {
     "enabled": false,

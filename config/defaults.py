@@ -1,5 +1,6 @@
 DEFAULT_CONFIG = {
     "enabled": True,
+    "logging": False,
     "db_root": "",
     "remote": {
         "enabled": False,

@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "db_root": "/root/Data/monitor_action",
+  "remote": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 9999
+  }
+}

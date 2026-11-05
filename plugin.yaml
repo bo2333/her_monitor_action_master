@@ -1,0 +1,7 @@
+name: monitor_action_master
+version: "1.0.0"
+entry: __init__.py
+description: 监察大师 - 实时事件流、事件采集、Token 追踪、按 Agent 分文件写入、TCP 推送，自动记录 Hermes 运行事件，零 Token 开销。
+python_dependencies:
+  - "msgpack>=1.0"
+  - "fastapi>=0.100.0"

@@ -32,7 +32,6 @@ def get_connection(db_path):
 
 
 def invalidate_connection(db_path):
-    """剔除损坏的连接；下次 get_connection 会重建。"""
     with _LOCK:
         conn = _CONNS.pop(db_path, None)
     if conn is not None:

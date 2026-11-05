@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS events (
     input_tokens   INTEGER DEFAULT 0,
     output_tokens  INTEGER DEFAULT 0,
     total_tokens   INTEGER DEFAULT 0,
-    cost           REAL    DEFAULT 0.0
+    cost           REAL    DEFAULT 0.0,
+    pid            INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);

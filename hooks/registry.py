@@ -38,6 +38,9 @@ def init_agent(ctx):
     except Exception:
         name = "unknown"
 
+    from hooks import handlers
+    handlers.set_agent_name(name)
+
     from config import get_config
     cfg = get_config()
 
@@ -48,35 +51,36 @@ def init_agent(ctx):
             from sinks import get_client
             client = get_client(name, remote)
         except Exception as e:
-            log(f"远程推送初始化失败: {e}")
+            log(f"TCP client 初始化失败: {e}", agent=name)
 
     if cfg.is_enabled():
         try:
             from storage import ensure_db
             ensure_db(name)
         except Exception as e:
-            log(f"预热 DB 失败: {e}")
+            log(f"预热 DB 失败: {e}", agent=name)
 
     return name, client
 
 
-def bind_hooks(ctx, handlers):
+def bind_hooks(ctx, handlers, agent_name, client):
     def bind(fn):
         def wrapped(**kw):
-            set_current_agent(None, None)
+            set_current_agent(agent_name, client)
             try:
                 return fn(**kw)
             finally:
                 clear_current_agent()
         wrapped.__name__ = getattr(fn, "__name__", "hook")
         wrapped.__qualname__ = getattr(fn, "__qualname__", wrapped.__name__)
+        wrapped.__doc__ = getattr(fn, "__doc__", None)
         return wrapped
 
     ok, fail = 0, 0
     for hook_name, fn_name in HOOKS:
         fn = getattr(handlers, fn_name, None)
         if fn is None:
-            log(f"缺少处理函数: {fn_name}")
+            log(f"缺少处理函数: {fn_name}", agent=agent_name)
             fail += 1
             continue
         try:
@@ -84,5 +88,6 @@ def bind_hooks(ctx, handlers):
             ok += 1
         except Exception as e:
             fail += 1
-            log(f"Hook 注册失败: {hook_name} -> {e}")
-    log(f"register() 完成：成功 {ok} 个，失败 {fail} 个")
+            log(f"Hook 注册失败: {hook_name} -> {e}", agent=agent_name)
+    log(f"register() 完成：成功 {ok} 个，失败 {fail} 个 "
+        f"(client={'有' if client else '无'})", agent=agent_name)

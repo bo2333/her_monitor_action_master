@@ -1,11 +1,15 @@
 import json
 import os
 import threading
+import time
 
 from .defaults import DEFAULT_CONFIG
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CONFIG_FILE = os.path.join(_PLUGIN_DIR, "config", "master_config.json")
+
+# is_enabled 缓存窗口：避免每个 hook 都 stat()。RPC 改配置会主动清缓存。
+_ENABLED_TTL = 1.0
 
 
 class Config:
@@ -13,6 +17,8 @@ class Config:
         self._lock = threading.Lock()
         self._config = json.loads(json.dumps(DEFAULT_CONFIG))
         self._mtime = 0.0
+        self._enabled_cache = None
+        self._enabled_cached_at = 0.0
         self._ensure_file()
         self._load_if_changed()
 
@@ -46,11 +52,14 @@ class Config:
             with self._lock:
                 self._config = cfg
                 self._mtime = m
+                self._enabled_cache = None
         except Exception:
             pass
 
     def reload(self):
         self._mtime = 0.0
+        with self._lock:
+            self._enabled_cache = None
         self._load_if_changed()
 
     def snapshot(self):
@@ -59,14 +68,21 @@ class Config:
             return json.loads(json.dumps(self._config))
 
     def is_enabled(self):
+        now = time.time()
+        with self._lock:
+            if (self._enabled_cache is not None
+                    and now - self._enabled_cached_at < _ENABLED_TTL):
+                return self._enabled_cache
         self._load_if_changed()
         with self._lock:
-            return bool(self._config.get("enabled", False))
+            self._enabled_cache = bool(self._config.get("enabled", False))
+            self._enabled_cached_at = now
+            return self._enabled_cache
 
     def get_db_root(self):
         self._load_if_changed()
         with self._lock:
-            raw = self._config.get("db_root", "")
+            raw = (self._config.get("db_root") or "").strip()
             if raw:
                 return raw
             return os.path.join(_PLUGIN_DIR, "data")
@@ -74,7 +90,9 @@ class Config:
     def get_remote(self):
         self._load_if_changed()
         with self._lock:
-            return json.loads(json.dumps(self._config.get("remote", {})))
+            r = json.loads(json.dumps(self._config.get("remote", {})))
+            r["host"] = str(r.get("host") or "127.0.0.1").strip()
+            return r
 
 
 _instance = Config()

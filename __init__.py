@@ -39,13 +39,7 @@ except Exception as e:
     raise
 
 
-# ============================================================
-# TUI Gateway config.set setter
-# ============================================================
 def _handle_config_set(rid, params, key, value, session):
-    """config.set 的 setter，签名由 TUI Gateway 约定。
-    params: {'key': 'monitor_action_master', 'value': {...}}
-    """
     from config.loader import get_config
     from config import MASTER_CONFIG
     import json
@@ -71,9 +65,7 @@ def _handle_config_set(rid, params, key, value, session):
         return {"jsonrpc": "2.0", "id": rid,
                 "error": {"code": -32000, "message": f"写入失败: {e}"}}
 
-    # ★ 强制重载，立即生效，不等 mtime
     cfg.reload()
-
     return {"jsonrpc": "2.0", "id": rid, "result": {"ok": True, "key": key}}
 
 
@@ -81,7 +73,7 @@ def _register_config_setter():
     try:
         from tui_gateway.methods_config_set import _CONFIG_SETTERS
         _CONFIG_SETTERS["monitor_action_master"] = _handle_config_set
-        log("已向 TUI Gateway 注册 config.set setter: monitor_action_master")
+        log("已向 TUI Gateway 注册 config.set setter")
         return True
     except ImportError:
         log("TUI Gateway 不可用，config.set 降级为文件 mtime 热加载")
@@ -110,19 +102,17 @@ def register(ctx):
         log(traceback.format_exc())
         agent_name, client = "unknown", None
 
-    registry.bind_hooks(ctx, handlers)
+    registry.bind_hooks(ctx, handlers, agent_name, client)
 
-    # ★ 降级状态源：写 runtime.json
     try:
         from status import write_runtime
         from config import get_config
         write_runtime(agent_name, _DEPS_REPORT,
                       get_config().get_db_root(),
-                      version="1.2.0")
-        log("已写出 status/runtime.json")
+                      version="1.2.1")
     except Exception as e:
-        log(f"写出 runtime 状态失败: {e}")
+        log(f"写出 runtime 状态失败: {e}", agent=agent_name)
 
-    if not all(_DEPS_REPORT.values()):
-        bad = [k for k, v in _DEPS_REPORT.items() if not v]
-        log(f"⚠ 依赖缺失：{bad}，相关功能已禁用")
+    bad = [k for k, v in _DEPS_REPORT.items() if not v]
+    if bad:
+        log(f"⚠ 依赖缺失：{bad}，相关功能已禁用", agent=agent_name)

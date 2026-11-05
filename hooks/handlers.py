@@ -1,4 +1,6 @@
-import json
+import os
+import threading
+import time
 
 from config import get_config
 from context import get_current_agent, get_current_client
@@ -8,49 +10,66 @@ from storage import Writer
 
 _config = get_config()
 _writer = None
+_writer_lock = threading.Lock()
 _AGENT = "unknown"
+
+# 异常日志节流：同一 (agent, action) 5 秒内只打第一条，其余计数
+_err_lock = threading.Lock()
+_err_last = {}
+_err_suppressed = {}
+
+
+def set_agent_name(name):
+    global _AGENT
+    _AGENT = name or "unknown"
 
 
 def _db_path(agent):
     root = _config.get_db_root()
-    return f"{root}/{agent or 'unknown'}.db"
+    return os.path.join(root, f"{agent or 'unknown'}.db")
 
 
 def _get_writer():
     global _writer
-    if _writer is None:
-        _writer = Writer(_db_path)
+    if _writer is not None:
+        return _writer
+    with _writer_lock:
+        if _writer is None:
+            _writer = Writer(_db_path)
     return _writer
+
+
+def _log_event_error(action, agent, exc):
+    key = (agent, action)
+    now = time.time()
+    with _err_lock:
+        last = _err_last.get(key, 0.0)
+        if now - last < 5.0:
+            _err_suppressed[key] = _err_suppressed.get(key, 0) + 1
+            return
+        _err_last[key] = now
+        suppressed = _err_suppressed.pop(key, 0)
+    if suppressed:
+        log(f"处理异常 {action}（过去 5s 抑制 {suppressed} 次）: {exc!r}", agent=agent)
+    else:
+        log(f"处理异常 {action}: {exc!r}", agent=agent)
 
 
 def _process_event(action, flow, conn, level=1, **extra):
     if not _config.is_enabled():
         return
+    agent = get_current_agent() or _AGENT
     try:
-        agent = get_current_agent() or _AGENT
         client = get_current_client()
         data = format_event(agent, action, flow, conn, level, **extra)
         _get_writer().put(data)
         if client is not None:
             client.push(data)
     except Exception as e:
-        log(f"处理异常 {action}: {e}")
+        _log_event_error(action, agent, e)
 
 
-def _preview(val, limit=1500):
-    if val is None:
-        return ""
-    if isinstance(val, str):
-        s = val
-    else:
-        try:
-            s = json.dumps(val, ensure_ascii=False, default=str, check_circular=True)
-        except Exception:
-            s = str(val)[:limit * 2]
-    if len(s) > limit:
-        s = s[:limit] + f"\n...[截断，原长 {len(s)}]"
-    return s
-
+# ---- 27 个 observer hook ----
 
 def on_pre_llm_call(**kw):
     msg = kw.get("user_message") or kw.get("prompt")
@@ -88,7 +107,8 @@ def on_post_api_request(**kw):
     tot_tok = int(usage.get("total_tokens") or (in_tok + out_tok))
     _process_event("api_request", 1,
                    f"model={kw.get('model','unknown')} | in={in_tok} out={out_tok} total={tot_tok}",
-                   level=2, input_tokens=in_tok, output_tokens=out_tok, total_tokens=tot_tok)
+                   level=2, input_tokens=in_tok, output_tokens=out_tok,
+                   total_tokens=tot_tok)
 
 
 def on_api_request_error(**kw):
@@ -147,7 +167,8 @@ def on_post_auxiliary_call(**kw):
     tot_tok = int(usage.get("total_tokens") or (in_tok + out_tok))
     _process_event("auxiliary_result", 1,
                    f"aux_task={kw.get('aux_task','unknown')} | in={in_tok} out={out_tok} total={tot_tok}",
-                   level=2, input_tokens=in_tok, output_tokens=out_tok, total_tokens=tot_tok)
+                   level=2, input_tokens=in_tok, output_tokens=out_tok,
+                   total_tokens=tot_tok)
 
 
 def on_session_start(**kw):
@@ -190,7 +211,6 @@ def on_human_input_request(**kw):
     _process_event("human_input_request", 0,
                    f"prompt: {str(kw.get('prompt', kw.get('question','')))[:300]}",
                    level=3)
-    return None
 
 
 def on_human_input_resolved(**kw):
@@ -202,13 +222,11 @@ def on_human_input_resolved(**kw):
 def on_pre_transcription(**kw):
     _process_event("pre_transcription", 0,
                    f"source: {kw.get('source', kw.get('audio_path',''))}", level=0)
-    return None
 
 
 def on_pre_verify(**kw):
     _process_event("pre_verify", 0,
                    f"target: {str(kw.get('target',''))[:200]}", level=1)
-    return None
 
 
 def on_skill_lifecycle(**kw):

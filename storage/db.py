@@ -17,11 +17,6 @@ def _schema():
 
 
 def get_connection(db_path):
-    """返回本线程专属的长期连接。
-
-    只应被 Writer 后台线程调用；check_same_thread=False 是防御，
-    真正的保证来自"同一连接只在一个线程里使用"。
-    """
     with _LOCK:
         if db_path in _CONNS:
             return _CONNS[db_path]
@@ -36,10 +31,18 @@ def get_connection(db_path):
         return conn
 
 
+def invalidate_connection(db_path):
+    """剔除损坏的连接；下次 get_connection 会重建。"""
+    with _LOCK:
+        conn = _CONNS.pop(db_path, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def ensure_db(agent_name):
-    """建表用临时连接，绝不塞进 _CONNS，
-    避免主线程创建的连接被 writer 后台线程拿去用。
-    """
     from config import get_config
     root = get_config().get_db_root()
     p = os.path.join(root, f"{agent_name or 'unknown'}.db")

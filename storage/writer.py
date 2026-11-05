@@ -7,12 +7,15 @@ from .db import get_connection
 
 class Writer:
     def __init__(self, db_path_resolver):
-        self._q = queue.Queue()
-        self._db_path_resolver = db_path_resolver
+        self._q = queue.Queue(maxsize=10000)
+        self._resolver = db_path_resolver
         threading.Thread(target=self._loop, daemon=True).start()
 
     def put(self, data):
-        self._q.put(data)
+        try:
+            self._q.put_nowait(data)
+        except queue.Full:
+            pass
 
     def _loop(self):
         while True:
@@ -28,11 +31,9 @@ class Writer:
             try:
                 groups = {}
                 for d in batch:
-                    agent = d["user"] or "unknown"
-                    groups.setdefault(agent, []).append(d)
+                    groups.setdefault(d["user"] or "unknown", []).append(d)
                 for agent, items in groups.items():
-                    db_path = self._db_path_resolver(agent)
-                    conn = get_connection(db_path)
+                    conn = get_connection(self._resolver(agent))
                     for d in items:
                         conn.execute(
                             "INSERT INTO events "
@@ -41,7 +42,7 @@ class Writer:
                             "VALUES (?,?,?,?,?,?,?,?,?,?)",
                             (d["ts"], d["user"], d["action"], d["flow"],
                              d["conn"], d["level"], d["input_tokens"],
-                             d["output_tokens"], d["total_tokens"], d["cost"])
+                             d["output_tokens"], d["total_tokens"], d["cost"]),
                         )
                     conn.commit()
             except Exception:

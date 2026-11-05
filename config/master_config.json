@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "db_root": "/root/Data/monitor_action",
+  "db_root": "",
   "remote": {
     "enabled": false,
     "host": "127.0.0.1",

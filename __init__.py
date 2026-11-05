@@ -4,8 +4,6 @@ import traceback
 
 
 def _ensure_site_packages():
-    """Hermes 若以 -S/-I 启动，site-packages 不在 sys.path。
-    用 sys.executable 推导并补进去，幂等，不安装任何东西。"""
     exe = _os.path.realpath(_sys.executable)
     prefix = _os.path.dirname(_os.path.dirname(exe))
     sp = _os.path.join(
@@ -29,7 +27,7 @@ _DEPS_REPORT = _check_deps()
 from log import log
 
 log("=" * 60)
-log("__init__.py 顶层代码执行 —— Hermes 已 import 本插件")
+log("monitor_action_master 加载中")
 log(f"依赖检查结果: {_DEPS_REPORT}")
 
 try:
@@ -41,13 +39,90 @@ except Exception as e:
     raise
 
 
+# ============================================================
+# TUI Gateway config.set setter
+# ============================================================
+def _handle_config_set(rid, params, key, value, session):
+    """config.set 的 setter，签名由 TUI Gateway 约定。
+    params: {'key': 'monitor_action_master', 'value': {...}}
+    """
+    from config.loader import get_config
+    from config import MASTER_CONFIG
+    import json
+
+    cfg = get_config()
+    new_cfg = cfg.snapshot()
+
+    if isinstance(value, dict):
+        if "enabled" in value:
+            new_cfg["enabled"] = bool(value["enabled"])
+        if "db_root" in value:
+            new_cfg["db_root"] = str(value["db_root"] or "")
+        if "remote" in value and isinstance(value["remote"], dict):
+            new_cfg["remote"].update(value["remote"])
+
+    try:
+        os.makedirs(os.path.dirname(MASTER_CONFIG), exist_ok=True)
+        tmp = MASTER_CONFIG + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(new_cfg, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, MASTER_CONFIG)
+    except Exception as e:
+        return {"jsonrpc": "2.0", "id": rid,
+                "error": {"code": -32000, "message": f"写入失败: {e}"}}
+
+    # ★ 强制重载，立即生效，不等 mtime
+    cfg.reload()
+
+    return {"jsonrpc": "2.0", "id": rid, "result": {"ok": True, "key": key}}
+
+
+def _register_config_setter():
+    try:
+        from tui_gateway.methods_config_set import _CONFIG_SETTERS
+        _CONFIG_SETTERS["monitor_action_master"] = _handle_config_set
+        log("已向 TUI Gateway 注册 config.set setter: monitor_action_master")
+        return True
+    except ImportError:
+        log("TUI Gateway 不可用，config.set 降级为文件 mtime 热加载")
+        return False
+    except Exception as e:
+        log(f"注册 config.set setter 失败: {e}")
+        return False
+
+
+_RPC_AVAILABLE = _register_config_setter()
+
+
 def register(ctx):
     log("=" * 60)
     log("register(ctx) 被调用")
 
     if getattr(ctx, "_monitor_action_registered", False):
-        log("⚠ 检测到重复注册，跳过本次绑定")
+        log("⚠ 检测到重复注册，跳过")
         return
     ctx._monitor_action_registered = True
 
-    registry.bind_hooks(ctx, handlers, _DEPS_REPORT)
+    try:
+        agent_name, client = registry.init_agent(ctx)
+    except Exception as e:
+        log(f"init_agent 失败: {e}")
+        log(traceback.format_exc())
+        agent_name, client = "unknown", None
+
+    registry.bind_hooks(ctx, handlers)
+
+    # ★ 降级状态源：写 runtime.json
+    try:
+        from status import write_runtime
+        from config import get_config
+        write_runtime(agent_name, _DEPS_REPORT,
+                      get_config().get_db_root(),
+                      version="1.2.0")
+        log("已写出 status/runtime.json")
+    except Exception as e:
+        log(f"写出 runtime 状态失败: {e}")
+
+    if not all(_DEPS_REPORT.values()):
+        bad = [k for k, v in _DEPS_REPORT.items() if not v]
+        log(f"⚠ 依赖缺失：{bad}，相关功能已禁用")

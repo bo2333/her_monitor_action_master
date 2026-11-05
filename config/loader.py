@@ -12,48 +12,69 @@ class Config:
     def __init__(self):
         self._lock = threading.Lock()
         self._config = json.loads(json.dumps(DEFAULT_CONFIG))
+        self._mtime = 0.0
         self._ensure_file()
-        self._load()
+        self._load_if_changed()
 
     def _ensure_file(self):
         if os.path.exists(_CONFIG_FILE):
             return
         try:
+            os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
             with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
 
-    def _load(self):
+    def _load_if_changed(self):
+        try:
+            m = os.path.getmtime(_CONFIG_FILE)
+        except Exception:
+            return
+        if m == self._mtime:
+            return
+        try:
+            with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+            if isinstance(data, dict):
+                for k in ("enabled", "db_root"):
+                    if k in data:
+                        cfg[k] = data[k]
+                if "remote" in data and isinstance(data["remote"], dict):
+                    cfg["remote"].update(data["remote"])
+            with self._lock:
+                self._config = cfg
+                self._mtime = m
+        except Exception:
+            pass
+
+    def reload(self):
+        self._mtime = 0.0
+        self._load_if_changed()
+
+    def snapshot(self):
+        self._load_if_changed()
         with self._lock:
-            if not os.path.exists(_CONFIG_FILE):
-                return
-            try:
-                with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    for k in ("enabled", "db_root"):
-                        if k in data:
-                            self._config[k] = data[k]
-                    if "remote" in data and isinstance(data["remote"], dict):
-                        self._config["remote"].update(data["remote"])
-            except Exception:
-                pass
+            return json.loads(json.dumps(self._config))
 
     def is_enabled(self):
+        self._load_if_changed()
         with self._lock:
             return bool(self._config.get("enabled", False))
 
     def get_db_root(self):
+        self._load_if_changed()
         with self._lock:
-            return self._config.get("db_root", DEFAULT_CONFIG["db_root"])
+            raw = self._config.get("db_root", "")
+            if raw:
+                return raw
+            return os.path.join(_PLUGIN_DIR, "data")
 
     def get_remote(self):
+        self._load_if_changed()
         with self._lock:
             return json.loads(json.dumps(self._config.get("remote", {})))
-
-    def reload(self):
-        self._load()
 
 
 _instance = Config()

@@ -2,7 +2,6 @@ import queue
 import socket
 import threading
 import time
-import traceback
 
 from log import log
 
@@ -12,16 +11,16 @@ class TcpClient:
         self._agent = agent_name
         self._host = config.get("host", "127.0.0.1")
         self._port = int(config.get("port", 9999))
-        self._check_interval = int(config.get("check_interval", 60))
+        self._check = int(config.get("check_interval", 60))
         self._q = queue.Queue(maxsize=10000)
         self._sock = None
         self._lock = threading.Lock()
         try:
             import msgpack
             self._packer = msgpack
-            log(f"[sink] msgpack OK: {msgpack.__version__} agent={agent_name}")
+            log(f"[sink] msgpack OK agent={agent_name}")
         except Exception as e:
-            log(f"[sink] msgpack 不可用，TCP 推送禁用 agent={agent_name}: {e!r}")
+            log(f"[sink] msgpack 不可用，TCP 禁用: {e}")
             self._packer = None
             return
         threading.Thread(target=self._loop, daemon=True).start()
@@ -30,149 +29,91 @@ class TcpClient:
     def push(self, data):
         if self._packer is None:
             return
-        if self._q.qsize() > 100:
-            try:
-                while not self._q.empty():
-                    self._q.get_nowait()
-            except queue.Empty:
-                pass
         try:
             self._q.put_nowait(data)
         except queue.Full:
             pass
 
-    def _send_history(self, sock):
-        """连接后同步历史。依赖 storage 层的查询接口。"""
+    def _connect(self):
         try:
-            from storage.db import get_connection
-            from config import get_config
-            db_root = get_config().get_db_root()
-            import os
-            db_path = os.path.join(db_root, f"{self._agent}.db")
-            if not os.path.exists(db_path):
-                return
-            conn = get_connection(db_path)
-            rows = conn.execute(
-                "SELECT * FROM events ORDER BY id DESC LIMIT 500"
-            ).fetchall()
-            if not rows:
-                return
-            cols = [d[0] for d in conn.execute(
-                "SELECT * FROM events LIMIT 0"
-            ).description]
-            rows = [dict(zip(cols, r)) for r in reversed(rows)]
-            batch = []
-            for r in rows:
-                batch.append(self._packer.packb({"type": "log", "data": {
-                    "ts": int(r.get("ts") or time.time()),
-                    "user": str(r.get("user") or "unknown"),
-                    "flow": int(r.get("flow") or 0),
-                    "conn": str(r.get("conn") or ""),
-                    "action": str(r.get("action") or ""),
-                    "level": str(r.get("level") or ""),
-                    "input_tokens": int(r.get("input_tokens") or 0),
-                    "output_tokens": int(r.get("output_tokens") or 0),
-                    "total_tokens": int(r.get("total_tokens") or 0),
-                    "cost": float(r.get("cost") or 0.0),
-                }}))
-                if len(batch) >= 100:
-                    sock.sendall(b"".join(batch))
-                    batch.clear()
-                    time.sleep(0.02)
-            if batch:
-                sock.sendall(b"".join(batch))
-            log(f"[sink] 历史发送完成 ({len(rows)} 条) agent={self._agent}")
+            s = socket.create_connection((self._host, self._port), timeout=3)
+            s.setblocking(False)
+            self._sock = s
+            log(f"[sink] 已连接 {self._host}:{self._port}")
+            return True
         except Exception as e:
-            log(f"[sink] 发送历史失败 agent={self._agent}: {e!r}")
+            log(f"[sink] 连接失败 {self._host}:{self._port}: {e}")
+            self._sock = None
+            return False
 
     def _loop(self):
         retry = 0
         while True:
             sock = None
             try:
-                log(f"[sink] 尝试连接 {self._host}:{self._port} "
-                    f"(retry={retry}) agent={self._agent}")
-                sock = socket.create_connection((self._host, self._port), timeout=3)
-                sock.setblocking(False)
-                log(f"[sink] TCP 已连接 {self._host}:{self._port} agent={self._agent}")
-
-                # 1. hello
-                try:
-                    sock.sendall(self._packer.packb(
-                        {"type": "hello", "user": self._agent}
-                    ))
-                except Exception as e:
-                    log(f"[sink] 发送握手包失败: {e!r}")
-
+                if not self._connect():
+                    retry += 1
+                    time.sleep(min(5 * retry, self._check))
+                    continue
+                sock = self._sock
+                sock.sendall(self._packer.packb(
+                    {"type": "hello", "user": self._agent}))
                 retry = 0
-                # 2. 历史
-                self._send_history(sock)
-
-                last_send = time.time()
-                unpacker = self._packer.Unpacker(max_buffer_size=1 * 1024 * 1024)
+                last = time.time()
+                unpacker = self._packer.Unpacker(max_buffer_size=1 << 20)
 
                 while True:
-                    # 3. 实时事件
                     try:
                         item = self._q.get_nowait()
-                        try:
-                            sock.sendall(self._packer.packb(
-                                {"type": "log", "data": item}
-                            ))
-                            last_send = time.time()
-                        except BlockingIOError:
-                            self._q.put(item)
-                            time.sleep(0.05)
+                        sock.sendall(self._packer.packb(
+                            {"type": "log", "data": item}))
+                        last = time.time()
                     except queue.Empty:
                         pass
+                    except BlockingIOError:
+                        self._q.put(item)
+                        time.sleep(0.05)
 
-                    # 4. recv
                     try:
                         chunk = sock.recv(8192)
                         if not chunk:
-                            log(f"[sink] 服务端关闭连接 agent={self._agent}")
                             break
                         unpacker.feed(chunk)
                         for _ in unpacker:
                             pass
                     except BlockingIOError:
                         pass
-                    except Exception as e:
-                        log(f"[sink] recv 异常: {e!r}")
+                    except Exception:
                         break
 
-                    # 5. 心跳
-                    if time.time() - last_send > self._check_interval:
+                    if time.time() - last > self._check:
                         try:
                             sock.sendall(self._packer.packb(
-                                {"action": "__ping__"}
-                            ))
-                            last_send = time.time()
+                                {"action": "__ping__"}))
+                            last = time.time()
                         except Exception:
                             break
 
                     time.sleep(0.1)
-
             except Exception as e:
-                log(f"[sink] 连接失败 {self._host}:{self._port}: {e!r}")
+                log(f"[sink] 循环异常: {e}")
                 retry += 1
-                delay = min(5 * retry, self._check_interval)
-                time.sleep(delay)
+                time.sleep(min(5 * retry, self._check))
             finally:
                 if sock:
                     try:
                         sock.close()
                     except Exception:
                         pass
-                log(f"[sink] 连接关闭 agent={self._agent}")
+                self._sock = None
 
 
 _clients = {}
-_clients_lock = threading.Lock()
+_lock = threading.Lock()
 
 
 def get_client(agent_name, config):
-    with _clients_lock:
+    with _lock:
         if agent_name not in _clients:
             _clients[agent_name] = TcpClient(agent_name, config)
         return _clients[agent_name]

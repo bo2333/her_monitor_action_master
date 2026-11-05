@@ -1,7 +1,7 @@
 name: monitor_action_master
-version: "1.0.0"
+version: "1.2.0"
 entry: __init__.py
-description: 监察大师 - 实时事件流、事件采集、Token 追踪、按 Agent 分文件写入、TCP 推送，自动记录 Hermes 运行事件，零 Token 开销。
+description: 监察大师 - 观察 Hermes 运行时事件，按 Agent 分文件持久化到 SQLite，可选 TCP 推送。支持 TUI Gateway RPC 配置热更新。
 python_dependencies:
   - "msgpack>=1.0"
   - "fastapi>=0.100.0"

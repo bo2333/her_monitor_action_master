@@ -1,11 +1,11 @@
 import os
 import queue
 import socket
-import sqlite3
 import threading
 import time
 
 from log import log
+from storage.reader import load_recent
 
 _MAX_HISTORY = 500
 _RETRY_BASE = 5
@@ -59,55 +59,23 @@ class TcpClient:
         if not self._send_history_enabled:
             return
         try:
-            db_path = os.path.join(self._get_db_root(), f"{self.agent_name}.db")
+            db_path = os.path.join(
+                self._get_db_root(), f"{self.agent_name}.db")
         except Exception as e:
             log(f"[sink] 获取 DB 路径失败: {e!r}", agent=self.agent_name)
             return
-        if not os.path.exists(db_path):
-            return
 
-        rows = []
-        conn = None
-        try:
-            conn = sqlite3.connect(db_path, timeout=5)
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM events ORDER BY id DESC LIMIT ?",
-                (_MAX_HISTORY,),
-            ).fetchall()
-        except Exception as e:
-            log(f"[sink] 读取历史失败: {e!r}", agent=self.agent_name)
-            return
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-
+        rows = load_recent(db_path, limit=_MAX_HISTORY)
         if not rows:
             return
-
-        rows = [dict(r) for r in reversed(rows)]
 
         try:
             sock.setblocking(True)
             sock.settimeout(5.0)
             batch = []
-            for r in rows:
-                item = {
-                    "ts": int(r.get("ts") or time.time()),
-                    "user": str(r.get("user") or "unknown"),
-                    "flow": int(r.get("flow") or 0),
-                    "conn": str(r.get("conn") or ""),
-                    "action": str(r.get("action") or ""),
-                    "level": str(r.get("level") or ""),
-                    "input_tokens": int(r.get("input_tokens") or 0),
-                    "output_tokens": int(r.get("output_tokens") or 0),
-                    "total_tokens": int(r.get("total_tokens") or 0),
-                    "cost": float(r.get("cost") or 0.0),
-                }
-                batch.append(self._msgpack.packb({"type": "log", "data": item}))
+            for item in rows:
+                batch.append(self._msgpack.packb(
+                    {"type": "log", "data": item}))
                 if len(batch) >= 100:
                     sock.sendall(b"".join(batch))
                     batch.clear()
@@ -152,12 +120,12 @@ class TcpClient:
 
                 try:
                     hello_msg = self._msgpack.packb(
-                        {"type": "hello", "user": self.agent_name}
-                    )
+                        {"type": "hello", "user": self.agent_name})
                     sock.sendall(hello_msg)
                 except Exception as e:
                     if repr(e) != self._last_send_error:
-                        log(f"[sink] 发送握手失败: {e!r}", agent=self.agent_name)
+                        log(f"[sink] 发送握手失败: {e!r}",
+                            agent=self.agent_name)
                         self._last_send_error = repr(e)
 
                 retry_count = 0
@@ -178,8 +146,7 @@ class TcpClient:
                         item = self.push_queue.get_nowait()
                         try:
                             sock.sendall(self._msgpack.packb(
-                                {"type": "log", "data": item}
-                            ))
+                                {"type": "log", "data": item}))
                             last_send_time = time.time()
                         except BlockingIOError:
                             self.push_queue.put(item)
@@ -200,15 +167,15 @@ class TcpClient:
                         pass
                     except Exception as e:
                         if repr(e) != self._last_recv_error:
-                            log(f"[sink] recv 异常: {e!r}", agent=self.agent_name)
+                            log(f"[sink] recv 异常: {e!r}",
+                                agent=self.agent_name)
                             self._last_recv_error = repr(e)
                         break
 
                     if time.time() - last_send_time > check_interval:
                         try:
                             sock.sendall(self._msgpack.packb(
-                                {"action": "__ping__"}
-                            ))
+                                {"action": "__ping__"}))
                             last_send_time = time.time()
                         except Exception:
                             break
@@ -243,6 +210,5 @@ def get_client(agent_name, config, send_history=True):
     with _clients_lock:
         if agent_name not in _clients:
             _clients[agent_name] = TcpClient(
-                agent_name, config, send_history=send_history,
-            )
+                agent_name, config, send_history=send_history)
         return _clients[agent_name]

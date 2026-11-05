@@ -50,17 +50,19 @@ def _handle_config_set(rid, params, key, value, session):
     if isinstance(value, dict):
         if "enabled" in value:
             new_cfg["enabled"] = bool(value["enabled"])
+        if "logging" in value:
+            new_cfg["logging"] = bool(value["logging"])
         if "db_root" in value:
             new_cfg["db_root"] = str(value["db_root"] or "")
         if "remote" in value and isinstance(value["remote"], dict):
             new_cfg["remote"].update(value["remote"])
 
     try:
-        os.makedirs(os.path.dirname(MASTER_CONFIG), exist_ok=True)
+        _os.makedirs(_os.path.dirname(MASTER_CONFIG), exist_ok=True)
         tmp = MASTER_CONFIG + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(new_cfg, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, MASTER_CONFIG)
+        _os.replace(tmp, MASTER_CONFIG)
     except Exception as e:
         return {"jsonrpc": "2.0", "id": rid,
                 "error": {"code": -32000, "message": f"写入失败: {e}"}}
@@ -109,7 +111,7 @@ def register(ctx):
         from config import get_config
         write_runtime(agent_name, _DEPS_REPORT,
                       get_config().get_db_root(),
-                      version="1.2.1")
+                      version="1.2.6")
     except Exception as e:
         log(f"写出 runtime 状态失败: {e}", agent=agent_name)
 

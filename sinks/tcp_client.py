@@ -1,9 +1,7 @@
-import fcntl
 import os
 import queue
 import socket
 import sqlite3
-import tempfile
 import threading
 import time
 
@@ -12,33 +10,6 @@ from log import log
 _MAX_HISTORY = 500
 _RETRY_BASE = 5
 _LOOP_TICK = 0.1
-_LOCK_RETRY_INTERVAL = 3.0
-
-
-def _sink_lock_path(agent_name):
-    return os.path.join(
-        tempfile.gettempdir(),
-        f"monitor_action_sink_{agent_name}.lock",
-    )
-
-
-def _try_acquire_sink_lock(agent_name):
-    """非阻塞抢跨进程锁。返回 fd 表示成功，None 表示已被其他进程持有。"""
-    path = _sink_lock_path(agent_name)
-    fd = None
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        os.ftruncate(fd, 0)
-        os.write(fd, str(os.getpid()).encode())
-        return fd
-    except (BlockingIOError, OSError):
-        if fd is not None:
-            try:
-                os.close(fd)
-            except Exception:
-                pass
-        return None
 
 
 class TcpClient:
@@ -50,19 +21,22 @@ class TcpClient:
         self._last_connect_error = None
         self._last_send_error = None
         self._last_recv_error = None
-        self._lock_fd = None
 
         try:
             import msgpack
             self._msgpack = msgpack
         except Exception as e:
             self._msgpack = None
-            log(f"[sink] msgpack 不可用，TCP 禁用: {e!r}", agent=self.agent_name)
+            log(f"[sink] msgpack 不可用，TCP 禁用: {e!r}",
+                agent=self.agent_name, force=True)
             return
+
+        log(f"[sink] TcpClient 初始化 agent={self.agent_name} "
+            f"target={config.get('host')}:{config.get('port')}",
+            agent=self.agent_name, force=True)
 
         threading.Thread(target=self._loop, daemon=True).start()
 
-    # ---- 内部 ----
     def _get_remote(self):
         from config import get_config
         return get_config().get_remote()
@@ -71,22 +45,6 @@ class TcpClient:
         from config import get_config
         return get_config().get_db_root()
 
-    def _acquire_lock_blocking(self):
-        """阻塞直到抢到跨进程推送锁；每 3 秒重试一次。"""
-        if self._lock_fd is not None:
-            return
-        while True:
-            fd = _try_acquire_sink_lock(self.agent_name)
-            if fd is not None:
-                self._lock_fd = fd
-                log(f"[sink] 获得推送锁 pid={os.getpid()} agent={self.agent_name}",
-                    agent=self.agent_name)
-                return
-            log(f"[sink] 等待另一进程释放 {self.agent_name} 的推送锁，"
-                f"{int(_LOCK_RETRY_INTERVAL)}s 后重试", agent=self.agent_name)
-            time.sleep(_LOCK_RETRY_INTERVAL)
-
-    # ---- 对外 ----
     def push(self, data):
         if self._msgpack is None:
             return
@@ -95,7 +53,6 @@ class TcpClient:
         except queue.Full:
             pass
 
-    # ---- 历史回放 ----
     def _send_history(self, sock):
         try:
             db_path = os.path.join(self._get_db_root(), f"{self.agent_name}.db")
@@ -153,7 +110,8 @@ class TcpClient:
                     time.sleep(0.02)
             if batch:
                 sock.sendall(b"".join(batch))
-            log(f"[sink] 历史发送完成 ({len(rows)} 条)", agent=self.agent_name)
+            log(f"[sink] 历史发送完成 ({len(rows)} 条)",
+                agent=self.agent_name, force=True)
         except Exception as e:
             log(f"[sink] 发送历史失败: {e!r}", agent=self.agent_name)
         finally:
@@ -162,10 +120,9 @@ class TcpClient:
             except Exception:
                 pass
 
-    # ---- 主循环 ----
     def _loop(self):
-        # ★ 先抢跨进程锁，抢到才进入 TCP 循环
-        self._acquire_lock_blocking()
+        log(f"[sink] _loop 启动 agent={self.agent_name}",
+            agent=self.agent_name, force=True)
 
         retry_count = 0
         while True:
@@ -179,10 +136,13 @@ class TcpClient:
             check_interval = int(remote.get("check_interval", 60))
             sock = None
             try:
+                log(f"[sink] 尝试连接 {host}:{port} (retry={retry_count})",
+                    agent=self.agent_name, force=True)
                 sock = socket.create_connection((host, port), timeout=3)
                 sock.setblocking(False)
                 if not self._connected:
-                    log(f"[sink] 已连接 {host}:{port}", agent=self.agent_name)
+                    log(f"[sink] 已连接 {host}:{port}",
+                        agent=self.agent_name, force=True)
                     self._connected = True
                     self._last_connect_error = None
 
@@ -206,7 +166,8 @@ class TcpClient:
                     if (not now.get("enabled")
                             or now.get("host") != host
                             or int(now.get("port")) != port):
-                        log(f"[sink] 配置变更，断开重连", agent=self.agent_name)
+                        log(f"[sink] 配置变更，断开重连",
+                            agent=self.agent_name, force=True)
                         break
 
                     try:
@@ -225,7 +186,8 @@ class TcpClient:
                     try:
                         chunk = sock.recv(8192)
                         if not chunk:
-                            log(f"[sink] 服务端关闭连接", agent=self.agent_name)
+                            log(f"[sink] 服务端关闭连接",
+                                agent=self.agent_name, force=True)
                             break
                         unpacker.feed(chunk)
                         for _ in unpacker:
@@ -253,7 +215,7 @@ class TcpClient:
                 msg = repr(e)
                 if msg != self._last_connect_error:
                     log(f"[sink] 连接失败 {host}:{port}: {msg}",
-                        agent=self.agent_name)
+                        agent=self.agent_name, force=True)
                     self._last_connect_error = msg
                 self._connected = False
                 retry_count += 1

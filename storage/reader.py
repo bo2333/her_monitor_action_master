@@ -10,6 +10,10 @@ def load_recent(db_path, limit=500):
     if not db_path or not os.path.exists(db_path):
         return []
 
+    agent = None
+    if db_path.endswith(".db"):
+        agent = os.path.basename(db_path)[:-3]
+
     rows = []
     conn = None
     try:
@@ -19,7 +23,7 @@ def load_recent(db_path, limit=500):
             "SELECT * FROM events ORDER BY id DESC LIMIT ?",
             (limit,)).fetchall()
     except Exception as e:
-        log(f"[reader] 读取失败 {db_path}: {e!r}")
+        log(f"[reader] 读取失败 {db_path}: {e!r}", agent=agent)
         return []
     finally:
         if conn is not None:

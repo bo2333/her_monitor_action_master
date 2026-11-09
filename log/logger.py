@@ -7,7 +7,6 @@ import time
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOG_DIR = os.path.join(_PLUGIN_DIR, "logs")
 
-# 启动时立即尝试创建目录；失败打 stderr，不再静默
 try:
     os.makedirs(_LOG_DIR, exist_ok=True)
     _LOG_DIR_OK = True
@@ -28,8 +27,8 @@ _lock = threading.Lock()
 
 # ============================================================================
 # 启动错误日志：每次启动清空，只写 register() 期间的错误
-# 文件名：logs/startup_error.<role>.log
-# 不受 config.logging 控制
+# 唯一落盘：logs/startup_error.<role>.log
+# 不再写 logs/_startup.log（避免无限累积）
 # ============================================================================
 _startup_role = None
 _startup_lock = threading.Lock()
@@ -62,9 +61,12 @@ def clear_startup_log():
 def log_startup_error(msg, agent=None):
     """写启动错误日志。不受 config.logging 控制。
 
-    - append 到 logs/startup_error.<role>.log
-    - 同时打 stderr（Hermes 启动收集器会捕获）
-    - 同时走 log_error（穿透 config，进 logs/<agent>.log）
+    只做两件事：
+    1. append 到 logs/startup_error.<role>.log（每次启动清空）
+    2. 同时打 stderr（Hermes 启动收集器会捕获）
+
+    ★ 不再调 log_error(agent="_startup")，避免生成 logs/_startup.log
+    ★ agent 参数保留仅用于签名兼容，不参与任何写入
     """
     text = str(msg)
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -86,11 +88,6 @@ def log_startup_error(msg, agent=None):
     except Exception:
         pass
 
-    try:
-        log_error(text, agent=agent or "_startup")
-    except Exception:
-        pass
-
 
 def _is_enabled(force=False):
     if force:
@@ -99,7 +96,6 @@ def _is_enabled(force=False):
         from config import get_config
         return get_config().is_logging_enabled()
     except Exception as e:
-        # config 加载失败时**默认开启**，宁可多写不能静默关闭
         print(
             f"[her_monitor_action_master] config 加载失败，日志默认开启: {e}",
             file=sys.stderr,

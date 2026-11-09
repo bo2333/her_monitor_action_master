@@ -33,7 +33,7 @@ class Config:
                 json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(
-                f"[monitor_action_master] 创建默认配置失败: {e}",
+                f"[her_monitor_action_master] 创建默认配置失败: {e}",
                 file=sys.stderr,
             )
 
@@ -86,7 +86,7 @@ class Config:
             return True
         except Exception as e:
             print(
-                f"[monitor_action_master] 写回 master_config.json 失败: {e}",
+                f"[her_monitor_action_master] 写回 master_config.json 失败: {e}",
                 file=sys.stderr,
             )
             return False
@@ -104,7 +104,7 @@ class Config:
                 data = json.load(f)
         except Exception as e:
             print(
-                f"[monitor_action_master] master_config.json 解析失败: {e}",
+                f"[her_monitor_action_master] master_config.json 解析失败: {e}",
                 file=sys.stderr,
             )
             return
@@ -118,7 +118,7 @@ class Config:
                 except Exception:
                     pass
                 print(
-                    "[monitor_action_master] master_config.json "
+                    "[her_monitor_action_master] master_config.json "
                     "已补全缺失字段并写回",
                     file=sys.stderr,
                 )

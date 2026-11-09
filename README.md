@@ -1,11 +1,11 @@
-# monitor_action_master
+# her_monitor_action_master
 
 观察 Hermes 运行时事件，按 Agent 分文件持久化到 SQLite，可选 TCP 推送。零 Token 开销。
 
 ## 依赖
 
 插件依赖在 `plugin.yaml` 的 `python_dependencies` 中声明。由 Hermes PM 在
-`hermes plugins enable monitor_action_master` 时自动安装。
+`hermes plugins enable her_monitor_action_master` 时自动安装。
 
 若 PM 不可用，可手动安装：
 
@@ -49,7 +49,7 @@
 
 ## 日志
 
-- 插件自身使用 `logging.getLogger("monitor_action_master")`，由 Hermes 集中管理。
+- 插件自身使用 `logging.getLogger("her_monitor_action_master")`，由 Hermes 集中管理。
 - 依赖缺失信息写入 `logs/deps.log`，包含可执行的修复命令。
 
 ## 从 v1.0 迁移
@@ -61,7 +61,7 @@
 
 
 ###
-monitor_action_master/
+her_monitor_action_master/
 ├── plugin.yaml                    # 元信息 + 依赖声明
 ├── __init__.py                    # 入口：路径兜底 → 依赖检查 → 注册 hooks
 ├── README.md

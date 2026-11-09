@@ -25,7 +25,7 @@ def _cleanup_old_files():
         pass
 
 
-def write_runtime(agent, deps_report, db_root, version="1.2.11", role="unknown"):
+def write_runtime(agent, deps_report, db_root, version="1.2.12", role="unknown"):
     data = {
         "pid": os.getpid(),
         "agent": agent or "unknown",

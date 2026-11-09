@@ -1,3 +1,4 @@
+#　项目根目录 __init__.py　
 import os as _os
 import sys as _sys
 import traceback
@@ -18,8 +19,26 @@ def _ensure_site_packages():
 _ensure_site_packages()
 
 _PLUGIN_DIR = _os.path.dirname(_os.path.abspath(__file__))
+
+
+def _purge_foreign_modules():
+    """若 sys.modules 中同名顶层模块来自其他插件，从缓存中摘掉，
+    避免 from log import log 之类拿到别的插件的模块。"""
+    for name in ("deps", "log", "config", "context",
+                 "storage", "events", "hooks", "sinks", "status"):
+        mod = _sys.modules.get(name)
+        if mod is None:
+            continue
+        f = getattr(mod, "__file__", "") or ""
+        d = _os.path.dirname(_os.path.abspath(f)) if f else ""
+        if d != _PLUGIN_DIR:
+            _sys.modules.pop(name, None)
+
+
+_purge_foreign_modules()
+
 if _PLUGIN_DIR not in _sys.path:
-    _sys.path.append(_PLUGIN_DIR)
+    _sys.path.insert(0, _PLUGIN_DIR)
 
 from deps import check as _check_deps
 _DEPS_REPORT = _check_deps()
@@ -27,7 +46,7 @@ _DEPS_REPORT = _check_deps()
 from log import log
 
 log("=" * 60)
-log("monitor_action_master 加载中")
+log("her_monitor_action_master 加载中")
 log(f"依赖检查结果: {_DEPS_REPORT}")
 
 try:
@@ -98,7 +117,7 @@ def _handle_config_set(rid, params, key, value, session):
 def _register_config_setter():
     try:
         from tui_gateway.methods_config_set import _CONFIG_SETTERS
-        _CONFIG_SETTERS["monitor_action_master"] = _handle_config_set
+        _CONFIG_SETTERS["her_monitor_action_master"] = _handle_config_set
         log("已向 TUI Gateway 注册 config.set setter")
         return True
     except ImportError:
@@ -120,10 +139,10 @@ def register(ctx):
     log("=" * 60)
     log("register(ctx) 被调用")
 
-    if getattr(ctx, "_monitor_action_registered", False):
+    if getattr(ctx, "_her_monitor_action_registered", False):
         log("⚠ 检测到重复注册，跳过")
         return
-    ctx._monitor_action_registered = True
+    ctx._her_monitor_action_registered = True
 
     try:
         agent_name, client = registry.init_agent(ctx, role=_ROLE)

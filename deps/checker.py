@@ -33,7 +33,7 @@ def check():
         f"=== 依赖缺失: {missing} ===",
         f"sys.executable = {sys.executable}",
         "修复方式（任选其一）：",
-        "  1) 官方：hermes plugins enable monitor_action_master",
+        "  1) 官方：hermes plugins enable her_monitor_action_master",
         f"  2) 手动：{sys.executable} -m pip install {specs}",
     ]
     try:

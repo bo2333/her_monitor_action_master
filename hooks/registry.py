@@ -19,14 +19,14 @@ HOOKS = [
     ("session_end", "on_session_end"),
     ("context_compression", "on_context_compression"),
     ("memory_update", "on_memory_update"),
-    ("on_session_finalize", "on_session_finalize"),
-    ("on_session_reset", "on_session_reset"),
-    ("on_session_delete", "on_session_delete"),
-    ("on_human_input_request", "on_human_input_request"),
-    ("on_human_input_resolved", "on_human_input_resolved"),
+    ("session_finalize", "on_session_finalize"),
+    ("session_reset", "on_session_reset"),
+    ("session_delete", "on_session_delete"),
+    ("human_input_request", "on_human_input_request"),
+    ("human_input_resolved", "on_human_input_resolved"),
     ("pre_transcription", "on_pre_transcription"),
     ("pre_verify", "on_pre_verify"),
-    ("on_skill_lifecycle", "on_skill_lifecycle"),
+    ("skill_lifecycle", "on_skill_lifecycle"),
     ("kanban_task_completed", "on_kanban_task_completed"),
     ("kanban_task_blocked", "on_kanban_task_blocked"),
 ]
@@ -56,10 +56,11 @@ def init_agent(ctx, role="unknown"):
     if remote.get("enabled"):
         try:
             from sinks import get_client
-            # ★ 只有 gateway 做历史回放，dashboard 不发历史（避免两进程各发一份）
+            # 只有 gateway 做历史回放，dashboard 不发历史（避免两进程各发一份）
             client = get_client(
                 name, remote,
                 send_history=(role != "dashboard"),
+                role=role,
             )
         except Exception as e:
             log(f"TCP client 初始化失败: {e}", agent=name)

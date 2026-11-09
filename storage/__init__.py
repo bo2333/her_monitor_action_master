@@ -1,3 +1,4 @@
+# storage/__init__.py
 from .db import ensure_db, get_connection
 from .writer import Writer
 

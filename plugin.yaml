@@ -1,7 +1,6 @@
-name: monitor_action_master
-version: "1.2.1"
+name: her_monitor_action_master
+version: "1.2.12"
 entry: __init__.py
 description: 监察大师 - 观察 Hermes 运行时事件，按 Agent 分文件持久化到 SQLite，可选 TCP 推送。支持 TUI Gateway RPC 配置热更新。
 python_dependencies:
   - "msgpack>=1.0"
-  - "fastapi>=0.100.0"

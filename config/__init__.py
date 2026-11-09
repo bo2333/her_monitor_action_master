@@ -1,3 +1,4 @@
+# config/__init__.py
 import os
 
 from .loader import get_config

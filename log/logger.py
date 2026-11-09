@@ -12,13 +12,13 @@ try:
     _LOG_DIR_OK = True
 except Exception as _e:
     print(
-        f"[monitor_action_master] 无法创建日志目录 {_LOG_DIR}: {_e}，"
+        f"[her_monitor_action_master] 无法创建日志目录 {_LOG_DIR}: {_e}，"
         f"将使用 stderr fallback",
         file=sys.stderr,
     )
     _LOG_DIR_OK = False
 
-_logger = logging.getLogger("monitor_action_master")
+_logger = logging.getLogger("her_monitor_action_master")
 _logger.setLevel(logging.INFO)
 _logger.propagate = False
 
@@ -35,7 +35,7 @@ def _is_enabled(force=False):
     except Exception as e:
         # ★ 关键：config 加载失败时**默认开启**，宁可多写不能静默关闭
         print(
-            f"[monitor_action_master] config 加载失败，日志默认开启: {e}",
+            f"[her_monitor_action_master] config 加载失败，日志默认开启: {e}",
             file=sys.stderr,
         )
         return True
@@ -69,7 +69,7 @@ def _handler_for(agent):
         except Exception as e:
             # ★ 关键：FileHandler 创建失败 → stderr fallback，不静默
             print(
-                f"[monitor_action_master] 无法创建日志文件 {path}: {e}，"
+                f"[her_monitor_action_master] 无法创建日志文件 {path}: {e}，"
                 f"改用 stderr fallback",
                 file=sys.stderr,
             )
@@ -94,7 +94,7 @@ def log(msg, agent=None, level=logging.INFO, force=False):
         # ★ 关键：日志写入失败必须打 stderr，不能吞
         try:
             print(
-                f"[monitor_action_master] 日志写入失败: {e}: {msg}",
+                f"[her_monitor_action_master] 日志写入失败: {e}: {msg}",
                 file=sys.stderr,
             )
         except Exception:

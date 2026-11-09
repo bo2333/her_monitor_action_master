@@ -1,4 +1,4 @@
--- monitor_action_master/storage/schema.sql
+-- her_monitor_action_master/storage/schema.sql
 -- 事件明细表。每个 Agent 一个 .db 文件，文件里只有这一张表。
 
 CREATE TABLE IF NOT EXISTS events (

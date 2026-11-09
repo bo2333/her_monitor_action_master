@@ -13,8 +13,9 @@ _LOOP_TICK = 0.1
 
 
 class TcpClient:
-    def __init__(self, agent_name, config, send_history=True):
+    def __init__(self, agent_name, config, send_history=True, role="unknown"):
         self.agent_name = agent_name or "unknown"
+        self.role = role or "unknown"
         self._send_history_enabled = send_history
         self.push_queue = queue.Queue(maxsize=10000)
         self._sock = None
@@ -32,7 +33,7 @@ class TcpClient:
                 agent=self.agent_name, force=True)
             return
 
-        log(f"[sink] TcpClient 初始化 agent={self.agent_name} "
+        log(f"[sink] TcpClient 初始化 agent={self.agent_name} role={self.role} "
             f"target={config.get('host')}:{config.get('port')} "
             f"send_history={self._send_history_enabled}",
             agent=self.agent_name, force=True)
@@ -93,7 +94,7 @@ class TcpClient:
                 pass
 
     def _loop(self):
-        log(f"[sink] _loop 启动 agent={self.agent_name}",
+        log(f"[sink] _loop 启动 agent={self.agent_name} role={self.role}",
             agent=self.agent_name, force=True)
 
         retry_count = 0
@@ -119,8 +120,12 @@ class TcpClient:
                     self._last_connect_error = None
 
                 try:
-                    hello_msg = self._msgpack.packb(
-                        {"type": "hello", "user": self.agent_name})
+                    hello_msg = self._msgpack.packb({
+                        "type": "hello",
+                        "user": self.agent_name,
+                        "role": self.role,
+                        "pid":  os.getpid(),
+                    })
                     sock.sendall(hello_msg)
                 except Exception as e:
                     if repr(e) != self._last_send_error:
@@ -174,8 +179,12 @@ class TcpClient:
 
                     if time.time() - last_send_time > check_interval:
                         try:
-                            sock.sendall(self._msgpack.packb(
-                                {"action": "__ping__"}))
+                            sock.sendall(self._msgpack.packb({
+                                "type": "ping",
+                                "user": self.agent_name,
+                                "role": self.role,
+                                "pid":  os.getpid(),
+                            }))
                             last_send_time = time.time()
                         except Exception:
                             break
@@ -205,10 +214,12 @@ _clients = {}
 _clients_lock = threading.Lock()
 
 
-def get_client(agent_name, config, send_history=True):
+def get_client(agent_name, config, send_history=True, role="unknown"):
     agent_name = agent_name or "unknown"
     with _clients_lock:
         if agent_name not in _clients:
             _clients[agent_name] = TcpClient(
-                agent_name, config, send_history=send_history)
+                agent_name, config,
+                send_history=send_history,
+                role=role)
         return _clients[agent_name]

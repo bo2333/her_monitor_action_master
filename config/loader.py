@@ -8,6 +8,7 @@ from .defaults import DEFAULT_CONFIG
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CONFIG_FILE = os.path.join(_PLUGIN_DIR, "config", "master_config.json")
+_DEF_CONFIG_FILE = os.path.join(_PLUGIN_DIR, "config", "master_config.def.json")
 
 _TTL = 1.0
 
@@ -25,12 +26,52 @@ class Config:
         self._load_if_changed()
 
     def _ensure_file(self):
+        """确保 master_config.json 存在。
+
+        优先级：
+        1. 已存在 → 不动
+        2. 从 master_config.def.json 复制
+        3. 回退到内置 DEFAULT_CONFIG
+        """
         if os.path.exists(_CONFIG_FILE):
             return
         try:
             os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
-            with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
+        except Exception as e:
+            print(
+                f"[her_monitor_action_master] 创建配置目录失败: {e}",
+                file=sys.stderr,
+            )
+            return
+
+        # 尝试从 .def.json 复制
+        if os.path.exists(_DEF_CONFIG_FILE):
+            try:
+                with open(_DEF_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                tmp = _CONFIG_FILE + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, _CONFIG_FILE)
+                print(
+                    f"[her_monitor_action_master] 已从 {_DEF_CONFIG_FILE} "
+                    f"生成默认配置 {_CONFIG_FILE}",
+                    file=sys.stderr,
+                )
+                return
+            except Exception as e:
+                print(
+                    f"[her_monitor_action_master] 从 {_DEF_CONFIG_FILE} "
+                    f"复制失败: {e}，回退到内置 DEFAULT_CONFIG",
+                    file=sys.stderr,
+                )
+
+        # 回退到内置默认值
+        try:
+            tmp = _CONFIG_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, _CONFIG_FILE)
         except Exception as e:
             print(
                 f"[her_monitor_action_master] 创建默认配置失败: {e}",

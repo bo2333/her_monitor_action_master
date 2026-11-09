@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "logging": false,
-  "db_root": "",
+  "db_root": "/root/Data/her_monitor_action_master",
   "remote": {
     "enabled": false,
     "host": "127.0.0.1",

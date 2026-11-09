@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOG_DIR = os.path.join(_PLUGIN_DIR, "logs")
 
+# 兜底默认值：config 里读不到或非法时使用
 _MAX_LOG_BYTES = 256 * 1024 * 1024
 _BACKUP_COUNT = 3
 
@@ -31,10 +32,6 @@ _lock = threading.Lock()
 
 # ============================================================================
 # 启动期状态
-#   两个文件都在启动期写入，register() 结束后停写：
-#   - _startup.log                启动流水账（每次启动清空内容，保留文件）
-#   - startup_error.<role>.log    启动错误专档（每次启动清空内容，保留文件）
-#   两个文件都不会被删除，只是内容在每次启动时被截断为 0。
 # ============================================================================
 _startup_phase = True
 _startup_lock = threading.Lock()
@@ -54,7 +51,6 @@ def is_startup_phase():
 
 
 def set_startup_role(role):
-    """在 clear_startup_logs() 之前调用，决定 startup_error.<role>.log 文件名。"""
     global _startup_role
     _startup_role = (role or "unknown").strip() or "unknown"
 
@@ -66,24 +62,17 @@ def end_startup_phase():
 
 
 def clear_startup_logs():
-    """每次进程启动时调用：把两个文件的【内容】截断为 0，保留文件存在。
-
-    - 不删除文件，只清空内容
-    - 文件不存在时会被创建为 0 字节
-    - startup_error.<role>.log 在启动无错时保持 0 字节
-    """
+    """每次进程启动时调用：把两个文件的【内容】截断为 0，保留文件存在。"""
     if not _LOG_DIR_OK:
         return
     with _startup_lock:
         for p in (_STARTUP_LOG_FILE, _startup_error_file()):
             try:
                 os.makedirs(os.path.dirname(p), exist_ok=True)
-                # 以 "w" 打开即 truncate；文件不存在则创建
                 with open(p, "w", encoding="utf-8"):
                     pass
             except Exception:
                 pass
-        # 清理历史遗留（改名前的旧文件），这个可以删，不是主文件
         try:
             legacy = os.path.join(_LOG_DIR, "_startup.log.bak")
             if os.path.exists(legacy):
@@ -105,13 +94,6 @@ def _write_startup_file(path, text):
 
 
 def log_startup(msg):
-    """写启动流水账 → _startup.log。
-
-    - 启动期以外调用：直接 return
-    - 每次启动 clear_startup_logs() 已把文件内容截断为 0
-    - 不受 config.logging 控制
-    - 成功节点、错误节点都写
-    """
     if not is_startup_phase():
         return
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -125,13 +107,6 @@ def log_startup(msg):
 
 
 def log_startup_error(msg):
-    """写启动错误专档 → startup_error.<role>.log。
-
-    - 启动期以外调用：直接 return
-    - 每次启动 clear_startup_logs() 已把文件内容截断为 0（文件仍在）
-    - 不受 config.logging 控制
-    - 不写 _global.log / <agent>.log（错误专档独立）
-    """
     if not is_startup_phase():
         return
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -146,8 +121,42 @@ def log_startup_error(msg):
 
 
 # ============================================================================
-# 常规日志：RotatingFileHandler，256MB × 3
+# 常规日志：RotatingFileHandler，参数从 config.log_rotation 读取
 # ============================================================================
+def _get_log_rotation():
+    """从 config 读 log_rotation。非法/缺失时回退到模块默认值。
+
+    返回 (max_bytes, backup_count)
+    - max_bytes == 0 合法（表示不轮转）
+    - backup_count == 0 合法（不保留历史）
+    - 负数/非数字 → 回退默认
+    """
+    try:
+        from config import get_config
+        cfg = get_config().snapshot()
+        r = cfg.get("log_rotation") or {}
+        if not isinstance(r, dict):
+            r = {}
+
+        try:
+            max_bytes = int(r.get("max_bytes", _MAX_LOG_BYTES))
+            if max_bytes < 0:
+                max_bytes = _MAX_LOG_BYTES
+        except (TypeError, ValueError):
+            max_bytes = _MAX_LOG_BYTES
+
+        try:
+            backup_count = int(r.get("backup_count", _BACKUP_COUNT))
+            if backup_count < 0:
+                backup_count = _BACKUP_COUNT
+        except (TypeError, ValueError):
+            backup_count = _BACKUP_COUNT
+
+        return max_bytes, backup_count
+    except Exception:
+        return _MAX_LOG_BYTES, _BACKUP_COUNT
+
+
 def _is_enabled(force=False):
     if force:
         return True
@@ -178,12 +187,14 @@ def _handler_for(agent):
             _handlers[key] = h
             return h
 
+        # ★ 每次创建 handler 时读配置
+        max_bytes, backup_count = _get_log_rotation()
         path = os.path.join(_LOG_DIR, f"{key}.log")
         try:
             h = RotatingFileHandler(
                 path,
-                maxBytes=_MAX_LOG_BYTES,
-                backupCount=_BACKUP_COUNT,
+                maxBytes=max_bytes,
+                backupCount=backup_count,
                 encoding="utf-8",
             )
             h.setFormatter(logging.Formatter(

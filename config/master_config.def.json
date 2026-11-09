@@ -7,5 +7,9 @@
     "host": "127.0.0.1",
     "port": 9999,
     "check_interval": 60
+  },
+  "log_rotation": {
+    "max_bytes": 268435456,
+    "backup_count": 3
   }
 }

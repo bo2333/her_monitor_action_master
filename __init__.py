@@ -40,11 +40,7 @@ if _PLUGIN_DIR not in _sys.path:
     _sys.path.insert(0, _PLUGIN_DIR)
 
 
-# ============================================================================
-# 角色识别（必须在 log 模块 import 之前，让 startup_error 文件名正确）
-# ============================================================================
 def _process_role():
-    """返回 'dashboard' / 'gateway' / 'cli' / 'unknown'。"""
     try:
         with open("/proc/self/cmdline", "rb") as f:
             raw = f.read()
@@ -63,51 +59,59 @@ def _process_role():
 _ROLE = _process_role()
 
 
-# ============================================================================
-# log 模块加载 + 启动错误日志初始化
-# ============================================================================
+# ★ 加载 log：先设置角色，再清空两个启动文件（_startup.log + startup_error.<role>.log）
 from log import (
     log, log_error, log_warning,
-    set_startup_role, clear_startup_log, log_startup_error,
+    log_startup, log_startup_error,
+    clear_startup_logs, set_startup_role, end_startup_phase,
 )
 
 set_startup_role(_ROLE)
-clear_startup_log()          # 每次进程加载（=启动）清空启动错误日志
+clear_startup_logs()
+
+# ---- 启动流水账：所有节点都写 _startup.log；错误节点额外写 startup_error.<role>.log ----
+log_startup(f"===== 启动开始 role={_ROLE} pid={_os.getpid()} =====")
+log_startup(f"插件目录: {_PLUGIN_DIR}")
+log_startup(f"Python: {_sys.executable}")
+log_startup(f"进程参数: {_sys.argv[1:3]!r}")
 
 log("=" * 60)
 log("her_monitor_action_master 加载中")
 log(f"角色: {_ROLE}")
 
 
-# ============================================================================
-# 依赖检查
-# ============================================================================
+# ---- 依赖检查 ----
+log_startup("开始依赖检查")
 from deps import check as _check_deps
 _DEPS_REPORT = _check_deps()
+log_startup(f"依赖检查结果: {_DEPS_REPORT}")
 log(f"依赖检查结果: {_DEPS_REPORT}")
 
 _bad_deps = [k for k, v in _DEPS_REPORT.items() if not v]
 if _bad_deps:
-    log_startup_error(f"依赖缺失: {_bad_deps}，相关功能已禁用", agent="_startup")
+    _msg = f"依赖缺失: {_bad_deps}，相关功能已禁用"
+    log_startup(f"⚠ {_msg}")             # 流水账
+    log_startup_error(_msg)              # 错误专档
+    log_error(_msg, agent="_global")     # 常规日志
 
 
-# ============================================================================
-# hooks 导入
-# ============================================================================
+# ---- hooks 导入 ----
+log_startup("开始导入 hooks")
 try:
     from hooks import handlers, registry
+    log_startup("hooks 导入成功")
     log("hooks 导入成功")
 except Exception as e:
-    log_startup_error(f"hooks 导入失败: {e!r}", agent="_startup")
+    _msg = f"hooks 导入失败: {e!r}"
+    log_startup(f"✗ {_msg}")
+    log_startup_error(_msg)
+    log_error(_msg, agent="_global")
     log(traceback.format_exc())
     raise
 
 
-# ============================================================================
-# db_root 权限检查
-# ============================================================================
+# ---- db_root 检查 ----
 def _check_db_root():
-    """检查 db_root 是否可读写。返回 (ok, db_root, error)。"""
     from config import get_config
     try:
         db_root = get_config().get_db_root()
@@ -157,16 +161,19 @@ def _check_db_root():
 
 
 def _abort_startup(msg):
-    """启动失败：写启动错误日志 + raise。"""
     full = f"启动失败：{msg}"
+    log_startup(f"✗ {full}")             # 流水账
+    log_startup_error(full)              # 错误专档
+    log_error(full, agent="_global")     # 常规日志
     try:
-        log_startup_error(full, agent="_startup")
+        end_startup_phase()
     except Exception:
         pass
     raise RuntimeError(f"[her_monitor_action_master] {full}")
 
 
 def _ensure_db_root_ok():
+    log_startup("开始 db_root 检查")
     ok, db_root, err = _check_db_root()
     if not ok:
         _abort_startup(f"db_root 不可用（{db_root or '路径为空'}）：{err}")
@@ -179,18 +186,18 @@ def _ensure_db_root_ok():
                 f"config/master_config.json 未配置 db_root，"
                 f"使用默认路径 {db_root}"
             )
-            log(warn, agent="_startup", force=True)
-            log_startup_error(f"警告：{warn}", agent="_startup")
+            log_startup(f"⚠ {warn}")
+            log_startup_error(f"警告：{warn}")
+            log(warn, agent="_global", force=True)
     except Exception:
         pass
 
-    log(f"db_root 检查通过: {db_root}", agent="_startup", force=True)
+    log_startup(f"db_root 检查通过: {db_root}")
+    log(f"db_root 检查通过: {db_root}", agent="_global", force=True)
     return db_root
 
 
-# ============================================================================
-# config.set RPC setter
-# ============================================================================
+# ---- config.set RPC ----
 def _handle_config_set(rid, params, key, value, session):
     from config.loader import get_config
     from config import MASTER_CONFIG
@@ -221,7 +228,6 @@ def _handle_config_set(rid, params, key, value, session):
 
     cfg.reload()
 
-    # 运行期复核（不是启动错误，用常规 log_error）
     try:
         ok, root, err = _check_db_root()
         if not ok:
@@ -238,26 +244,31 @@ def _handle_config_set(rid, params, key, value, session):
 
 
 def _register_config_setter():
+    log_startup("开始注册 config.set setter")
     try:
         from tui_gateway.methods_config_set import _CONFIG_SETTERS
         _CONFIG_SETTERS["her_monitor_action_master"] = _handle_config_set
+        log_startup("config.set setter 注册成功")
         log("已向 TUI Gateway 注册 config.set setter")
         return True
     except ImportError:
+        log_startup("TUI Gateway 不可用，config.set 降级为文件 mtime 热加载")
         log("TUI Gateway 不可用，config.set 降级为文件 mtime 热加载")
         return False
     except Exception as e:
-        log(f"注册 config.set setter 失败: {e}")
+        _msg = f"config.set setter 注册失败: {e!r}"
+        log_startup(f"✗ {_msg}")
+        log_startup_error(_msg)
+        log_error(_msg, agent="_global")
         return False
 
 
 _RPC_AVAILABLE = _register_config_setter()
 
 
-# ============================================================================
-# register()
-# ============================================================================
+# ---- register() ----
 def register(ctx):
+    log_startup(f"===== register() 进入 role={_ROLE} pid={_os.getpid()} =====")
     print(f"[monitor] register() ENTER pid={_os.getpid()} role={_ROLE} "
           f"argv={_sys.argv[1:3]!r}",
           file=_sys.stderr, flush=True)
@@ -266,45 +277,66 @@ def register(ctx):
     log("register(ctx) 被调用")
 
     if getattr(ctx, "_her_monitor_action_registered", False):
+        log_startup("⚠ 检测到重复注册，跳过")
         log("⚠ 检测到重复注册，跳过")
+        end_startup_phase()
         return
     ctx._her_monitor_action_registered = True
 
-    # ★ 启动期 db_root 检查（失败 → 记 startup_error → raise）
-    _ensure_db_root_ok()
-
-    # ★ init_agent
     try:
-        agent_name, client = registry.init_agent(ctx, role=_ROLE)
-        print(f"[monitor] init_agent OK role={_ROLE} agent={agent_name} "
-              f"client={'有' if client else '无'}",
-              file=_sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[monitor] init_agent FAIL: {e!r}",
-              file=_sys.stderr, flush=True)
-        log_startup_error(f"init_agent 失败: {e!r}", agent="_startup")
-        log(traceback.format_exc())
-        agent_name, client = "unknown", None
+        _ensure_db_root_ok()
 
-    # ★ bind_hooks
-    try:
-        registry.bind_hooks(ctx, handlers, agent_name, client)
-    except Exception as e:
-        log_startup_error(f"bind_hooks 失败: {e!r}", agent="_startup")
-        log(traceback.format_exc())
-        raise
+        # ---- init_agent ----
+        log_startup("开始 init_agent")
+        try:
+            agent_name, client = registry.init_agent(ctx, role=_ROLE)
+            log_startup(f"init_agent OK agent={agent_name} "
+                        f"client={'有' if client else '无'}")
+            print(f"[monitor] init_agent OK role={_ROLE} agent={agent_name} "
+                  f"client={'有' if client else '无'}",
+                  file=_sys.stderr, flush=True)
+        except Exception as e:
+            _msg = f"init_agent 失败: {e!r}"
+            log_startup(f"✗ {_msg}")
+            log_startup_error(_msg)
+            log_error(_msg, agent="_global")
+            print(f"[monitor] init_agent FAIL: {e!r}",
+                  file=_sys.stderr, flush=True)
+            log(traceback.format_exc())
+            agent_name, client = "unknown", None
 
-    # ★ write_runtime
-    try:
-        from status import write_runtime
-        from config import get_config
-        write_runtime(agent_name, _DEPS_REPORT,
-                      get_config().get_db_root(),
-                      version="1.2.12",
-                      role=_ROLE)
-    except Exception as e:
-        log_startup_error(f"写出 runtime 状态失败: {e!r}", agent="_startup")
+        # ---- bind_hooks ----
+        log_startup("开始 bind_hooks")
+        try:
+            registry.bind_hooks(ctx, handlers, agent_name, client)
+            log_startup("bind_hooks 完成")
+        except Exception as e:
+            _msg = f"bind_hooks 失败: {e!r}"
+            log_startup(f"✗ {_msg}")
+            log_startup_error(_msg)
+            log_error(_msg, agent="_global")
+            log(traceback.format_exc())
+            raise
 
-    # 依赖缺失已在模块加载时记录，这里只提示
-    if _bad_deps:
-        log(f"⚠ 依赖缺失：{_bad_deps}，相关功能已禁用", agent=agent_name)
+        # ---- write_runtime ----
+        log_startup("开始 write_runtime")
+        try:
+            from status import write_runtime
+            from config import get_config
+            write_runtime(agent_name, _DEPS_REPORT,
+                          get_config().get_db_root(),
+                          version="1.2.12",
+                          role=_ROLE)
+            log_startup("write_runtime 完成")
+        except Exception as e:
+            _msg = f"write_runtime 失败: {e!r}"
+            log_startup(f"✗ {_msg}")
+            log_startup_error(_msg)
+            log_error(_msg, agent="_global")
+
+        if _bad_deps:
+            log(f"⚠ 依赖缺失：{_bad_deps}，相关功能已禁用", agent=agent_name)
+    finally:
+        log_startup(f"===== register() 完成 role={_ROLE} =====")
+        end_startup_phase()
+        log(f"register() 启动期结束 role={_ROLE}", agent="_global", force=True)

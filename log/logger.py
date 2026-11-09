@@ -3,9 +3,13 @@ import os
 import sys
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOG_DIR = os.path.join(_PLUGIN_DIR, "logs")
+
+_MAX_LOG_BYTES = 256 * 1024 * 1024
+_BACKUP_COUNT = 3
 
 try:
     os.makedirs(_LOG_DIR, exist_ok=True)
@@ -26,69 +30,124 @@ _handlers = {}
 _lock = threading.Lock()
 
 # ============================================================================
-# 启动错误日志：每次启动清空，只写 register() 期间的错误
-# 唯一落盘：logs/startup_error.<role>.log
-# 不再写 logs/_startup.log（避免无限累积）
+# 启动期状态
+#   两个文件都在启动期写入，register() 结束后停写：
+#   - _startup.log                启动流水账（每次启动清空内容，保留文件）
+#   - startup_error.<role>.log    启动错误专档（每次启动清空内容，保留文件）
+#   两个文件都不会被删除，只是内容在每次启动时被截断为 0。
 # ============================================================================
-_startup_role = None
+_startup_phase = True
 _startup_lock = threading.Lock()
+_startup_role = "unknown"
+
+_STARTUP_LOG_FILE = os.path.join(_LOG_DIR, "_startup.log")
 
 
-def set_startup_role(role):
-    """设置当前进程角色（dashboard/gateway/cli），决定启动错误日志文件名。"""
-    global _startup_role
-    _startup_role = role or "unknown"
-
-
-def _get_startup_log_path():
+def _startup_error_file():
     role = _startup_role or "unknown"
     return os.path.join(_LOG_DIR, f"startup_error.{role}.log")
 
 
-def clear_startup_log():
-    """清空当前角色的启动错误日志。模块加载时调用一次。"""
+def is_startup_phase():
+    with _startup_lock:
+        return _startup_phase
+
+
+def set_startup_role(role):
+    """在 clear_startup_logs() 之前调用，决定 startup_error.<role>.log 文件名。"""
+    global _startup_role
+    _startup_role = (role or "unknown").strip() or "unknown"
+
+
+def end_startup_phase():
+    global _startup_phase
+    with _startup_lock:
+        _startup_phase = False
+
+
+def clear_startup_logs():
+    """每次进程启动时调用：把两个文件的【内容】截断为 0，保留文件存在。
+
+    - 不删除文件，只清空内容
+    - 文件不存在时会被创建为 0 字节
+    - startup_error.<role>.log 在启动无错时保持 0 字节
+    """
     if not _LOG_DIR_OK:
         return
     with _startup_lock:
+        for p in (_STARTUP_LOG_FILE, _startup_error_file()):
+            try:
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                # 以 "w" 打开即 truncate；文件不存在则创建
+                with open(p, "w", encoding="utf-8"):
+                    pass
+            except Exception:
+                pass
+        # 清理历史遗留（改名前的旧文件），这个可以删，不是主文件
         try:
-            p = _get_startup_log_path()
-            if os.path.exists(p):
-                os.remove(p)
+            legacy = os.path.join(_LOG_DIR, "_startup.log.bak")
+            if os.path.exists(legacy):
+                os.remove(legacy)
         except Exception:
             pass
 
 
-def log_startup_error(msg, agent=None):
-    """写启动错误日志。不受 config.logging 控制。
+def _write_startup_file(path, text):
+    if not _LOG_DIR_OK:
+        return
+    with _startup_lock:
+        try:
+            os.makedirs(_LOG_DIR, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(text)
+        except Exception:
+            pass
 
-    只做两件事：
-    1. append 到 logs/startup_error.<role>.log（每次启动清空）
-    2. 同时打 stderr（Hermes 启动收集器会捕获）
 
-    ★ 不再调 log_error(agent="_startup")，避免生成 logs/_startup.log
-    ★ agent 参数保留仅用于签名兼容，不参与任何写入
+def log_startup(msg):
+    """写启动流水账 → _startup.log。
+
+    - 启动期以外调用：直接 return
+    - 每次启动 clear_startup_logs() 已把文件内容截断为 0
+    - 不受 config.logging 控制
+    - 成功节点、错误节点都写
     """
-    text = str(msg)
+    if not is_startup_phase():
+        return
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    role = _startup_role or "unknown"
-
-    if _LOG_DIR_OK:
-        with _startup_lock:
-            try:
-                os.makedirs(_LOG_DIR, exist_ok=True)
-                p = _get_startup_log_path()
-                with open(p, "a", encoding="utf-8") as f:
-                    f.write(f"[{ts}] [{role}] {text}\n")
-            except Exception:
-                pass
-
+    text = f"[{ts}] {msg}\n"
+    _write_startup_file(_STARTUP_LOG_FILE, text)
     try:
-        print(f"[her_monitor_action_master] 启动错误({role}): {text}",
+        print(f"[her_monitor_action_master] {msg}",
               file=sys.stderr, flush=True)
     except Exception:
         pass
 
 
+def log_startup_error(msg):
+    """写启动错误专档 → startup_error.<role>.log。
+
+    - 启动期以外调用：直接 return
+    - 每次启动 clear_startup_logs() 已把文件内容截断为 0（文件仍在）
+    - 不受 config.logging 控制
+    - 不写 _global.log / <agent>.log（错误专档独立）
+    """
+    if not is_startup_phase():
+        return
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    role = _startup_role or "unknown"
+    text = f"[{ts}] [{role}] {msg}\n"
+    _write_startup_file(_startup_error_file(), text)
+    try:
+        print(f"[her_monitor_action_master] 启动错误({role}): {msg}",
+              file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+# ============================================================================
+# 常规日志：RotatingFileHandler，256MB × 3
+# ============================================================================
 def _is_enabled(force=False):
     if force:
         return True
@@ -121,7 +180,12 @@ def _handler_for(agent):
 
         path = os.path.join(_LOG_DIR, f"{key}.log")
         try:
-            h = logging.FileHandler(path, encoding="utf-8")
+            h = RotatingFileHandler(
+                path,
+                maxBytes=_MAX_LOG_BYTES,
+                backupCount=_BACKUP_COUNT,
+                encoding="utf-8",
+            )
             h.setFormatter(logging.Formatter(
                 "[%(asctime)s] [%(levelname)s] %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
